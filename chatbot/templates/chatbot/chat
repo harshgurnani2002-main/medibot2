@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MedBot - Your AI Healthcare Assistant</title>
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css" rel="stylesheet" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.1.1/js/bootstrap.min.js"></script>
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            background: #e3f2fd;
+            font-family: 'Poppins', sans-serif;
+            color: #333;
+        }
+        .chat-container {
+            margin-top: auto;
+            margin-bottom: auto;
+        }
+        .card {
+            height: 550px;
+            border-radius: 15px;
+            background-color: white;
+            box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
+        }
+        .msg_card_body {
+            overflow-y: auto;
+            height: 400px;
+            padding: 10px;
+        }
+        .card-header {
+            border-radius: 15px 15px 0 0;
+            background-color: #0277bd;
+            padding: 15px 20px;
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            border-bottom: 1px solid #ddd;
+        }
+        .card-footer {
+            border-radius: 0 0 15px 15px;
+            background-color: #ffffff;
+            border-top: 1px solid #ddd;
+            padding: 10px;
+        }
+        .type_msg {
+            background-color: #ffffff;
+            border: 1px solid #0277bd;
+            color: #333;
+            height: 50px;
+            border-radius: 25px;
+            padding: 10px;
+            outline: none;
+            width: 100%;
+        }
+        .send_btn {
+            border-radius: 25px;
+            border: 0;
+            background-color: #0277bd;
+            color: white;
+            cursor: pointer;
+            padding: 10px 20px;
+            margin-left: 10px;
+            transition: background 0.2s ease;
+        }
+        .send_btn:hover {
+            background-color: #0056b3;
+        }
+        .user_img, .bot_img {
+            height: 40px;
+            width: 40px;
+            border-radius: 50%;
+            border: 2px solid #ffffff;
+        }
+        .msg_container {
+            background-color: #0099cc;
+            padding: 10px;
+            border-radius: 15px;
+            max-width: 60%;
+            color: white;
+            word-wrap: break-word;
+            font-size: 14px;
+        }
+        .msg_container_send {
+            background-color: #58cc71;
+            padding: 10px;
+            border-radius: 15px;
+            max-width: 60%;
+            color: white;
+            word-wrap: break-word;
+            font-size: 14px;
+        }
+        .msg_time, .msg_time_send {
+            font-size: 12px;
+            color: #ddd;
+            margin-left: 10px;
+        }
+        .appointment_container {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            padding: 10px;
+            border-radius: 15px;
+            max-width: 60%;
+            font-size: 14px;
+            word-wrap: break-word;
+        }
+        .loading {
+            display: none;
+            font-style: italic;
+            color: #555;
+            padding: 10px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid h-100">
+        <div class="row justify-content-center h-100">
+            <div class="col-md-8 col-xl-6 chat-container">
+                <div class="card">
+                    <!-- Chat Header -->
+                    <div class="card-header d-flex align-items-center">
+                        <img src="https://cdn-icons-png.flaticon.com/512/3774/3774299.png" class="bot_img mr-3">
+                        <div>
+                            <span>MedBot - Your AI Healthcare Assistant</span>
+                            <p class="mb-0" style="font-size: 12px; opacity: 0.7;">How can I assist you today?</p>
+                        </div>
+                    </div>
+
+                    <!-- Chat Body -->
+                    <div id="messageArea" class="card-body msg_card_body"></div>
+                    <div id="loading" class="loading">Processing...</div>
+
+                    <!-- Chat Footer -->
+                    <div class="card-footer">
+                        <form id="chatForm" class="input-group">
+                            <input
+                                type="text"
+                                id="text"
+                                name="msg"
+                                placeholder="Type your message..."
+                                autocomplete="off"
+                                class="form-control type_msg"
+                                required
+                            />
+                            <div class="input-group-append">
+                                <button type="submit" class="send_btn">Send</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JS Logic -->
+    <script>
+        $(document).ready(function () {
+            $("#chatForm").on("submit", function (event) {
+                event.preventDefault();
+
+                let rawText = $("#text").val().trim();
+                if (!rawText) return;
+
+                let date = new Date();
+                let str_time = date.getHours() + ":" + (date.getMinutes() < 10 ? '0' : '') + date.getMinutes();
+
+                // Display user message
+                let userHtml = `
+                    <div class="d-flex justify-content-end mb-3">
+                        <div class="msg_container_send">${rawText}
+                            <span class="msg_time_send">${str_time}</span>
+                        </div>
+                        <img src="https://cdn-icons-png.flaticon.com/512/2922/2922522.png" class="user_img ml-2">
+                    </div>
+                `;
+                $("#text").val("");
+                $("#messageArea").append(userHtml);
+                scrollToBottom();
+
+                // Show loading
+                $("#loading").show();
+
+                // Send message to backend
+                $.ajax({
+                    type: "POST",
+                    url: "/chatbot/",
+                    contentType: "application/json",
+                    data: JSON.stringify({ msg: rawText }),
+                    success: function (data) {
+                        $("#loading").hide();
+
+                        let botHtml;
+                        if (data.result.includes("Appointment created")) {
+                            // Highlight appointment confirmation
+                            botHtml = `
+                                <div class="d-flex justify-content-start mb-3">
+                                    <img src="https://cdn-icons-png.flaticon.com/512/3774/3774299.png" class="bot_img mr-2">
+                                    <div class="appointment_container">${data.result}
+                                        <span class="msg_time">${str_time}</span>
+                                    </div>
+                                </div>
+                            `;
+                        } else {
+                            botHtml = `
+                                <div class="d-flex justify-content-start mb-3">
+                                    <img src="https://cdn-icons-png.flaticon.com/512/3774/3774299.png" class="bot_img mr-2">
+                                    <div class="msg_container">${data.result}
+                                        <span class="msg_time">${str_time}</span>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                        $("#messageArea").append(botHtml);
+                        scrollToBottom();
+                    }
+                });
+            });
+
+            function scrollToBottom() {
+                $("#messageArea").scrollTop($("#messageArea")[0].scrollHeight);
+            }
+        });
+    </script>
+</body>
+</html>
