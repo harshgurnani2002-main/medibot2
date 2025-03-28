@@ -1,0 +1,158 @@
+import os
+import json
+import re
+from django.http import JsonResponse
+from django.shortcuts import render
+from django.conf import settings
+from django.views.decorators.csrf import csrf_exempt
+from .models import Doctor, Patient, Appointment
+from langchain_huggingface import HuggingFaceEndpoint
+from langchain_core.prompts import PromptTemplate
+from langchain.chains import RetrievalQA
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+
+# Step 1: Setup LLM
+HF_TOKEN = os.getenv("HF_TOKEN")
+HUGGINGFACE_REPO_ID = "mistralai/Mistral-7B-Instruct-v0.3"
+
+def load_llm():
+    llm = HuggingFaceEndpoint(
+        repo_id=HUGGINGFACE_REPO_ID,
+        temperature=0.5,
+        model_kwargs={"token": HF_TOKEN, "max_length": "512"}
+    )
+    return llm
+
+# Step 2: Load FAISS Vector Store
+DB_FAISS_PATH = os.path.join(settings.BASE_DIR, 'chatbot', 'vectorstore', 'db_faiss')
+
+embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+try:
+    if not os.path.exists(DB_FAISS_PATH):
+        os.makedirs(DB_FAISS_PATH)
+
+    db = FAISS.load_local(DB_FAISS_PATH, embedding_model, allow_dangerous_deserialization=True)
+    print("Vector store loaded successfully!")
+except Exception as e:
+    print(f"Failed to load FAISS database: {e}")
+    db = None
+
+# Step 3: Custom Prompt Template
+CUSTOM_PROMPT_TEMPLATE = """
+Use the pieces of information provided in the context to answer user's question.
+If you don't know the answer, just say that you don't know, don't try to make up an answer.
+Don't provide anything out of the given context.
+
+If the user asks to book an appointment, extract the following details:
+- Doctor's name
+- Patient's name
+
+Example:
+User: "Book an appointment with Dr. Smith for John Doe"
+Response: "Let me check the availability and book it for you."
+
+Context: {context}
+Question: {question}
+
+Start the answer directly. No small talk please.
+"""
+
+def set_custom_prompt():
+    prompt = PromptTemplate(
+        template=CUSTOM_PROMPT_TEMPLATE,
+        input_variables=["context", "question"]
+    )
+    return prompt
+
+# Step 4: Setup RetrievalQA Chain
+if db:
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=load_llm(),
+        chain_type="stuff",
+        retriever=db.as_retriever(search_kwargs={'k': 3}),
+        return_source_documents=True,
+        chain_type_kwargs={'prompt': set_custom_prompt()}
+    )
+else:
+    qa_chain = None
+
+# Step 5: Extraction Logic (No Email Required)
+def extract_booking_details(query):
+    # Only extract doctor and patient names
+    pattern = r"book an appointment with (Dr\.?\s[^\s]+(?:\s[^\s]+)?) for ([^\s]+(?:\s[^\s]+)?)"
+    match = re.search(pattern, query, re.IGNORECASE)
+
+    if match:
+        doctor_name = match.group(1).strip()
+        patient_name = match.group(2).strip()
+        print(f"Extracted -> Doctor: {doctor_name}, Patient: {patient_name}")
+        return doctor_name, patient_name
+    else:
+        print(f"Failed to extract details from: {query}")
+        return None, None
+
+# Step 6: Book Appointment Logic (No Email Required)
+def book_appointment(doctor_name, patient_name):
+    try:
+        # Normalize doctor name to avoid case issues
+        doctor = Doctor.objects.get(name__iexact=doctor_name)
+
+        # Check for existing appointment
+        if Appointment.objects.filter(doctor=doctor).exists():
+            return f"Doctor {doctor_name} already has an appointment. Please choose another time."
+
+        # Create new patient if not existing
+        patient, created = Patient.objects.get_or_create(
+            name=patient_name,
+            defaults={'age': 30, 'contact_info': 'Not Provided'}
+        )
+
+        # Create appointment
+        Appointment.objects.create(doctor=doctor, patient=patient)
+        return f"Appointment successfully booked with {doctor_name} for {patient_name}."
+    
+    except Doctor.DoesNotExist:
+        return f"Doctor '{doctor_name}' not found."
+    except Exception as e:
+        return f"Failed to book appointment: {str(e)}"
+
+# Step 7: Chat View
+@csrf_exempt
+def chatbot_view(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            user_query = data.get('msg')
+
+            if not user_query:
+                return JsonResponse({'error': 'Empty input. Please type a message.'}, status=400)
+
+            # Check if the query is an appointment request
+            doctor_name, patient_name = extract_booking_details(user_query)
+
+            if doctor_name and patient_name:
+                result = book_appointment(doctor_name, patient_name)
+                return JsonResponse({'result': result})
+
+            if not qa_chain:
+                return JsonResponse({'error': 'Chatbot is not properly configured. FAISS or LLM is missing.'}, status=500)
+
+            # Get chatbot response using RetrievalQA
+            response = qa_chain.invoke({'query': user_query})
+            result = response.get("result", "Sorry, I couldn't process that.")
+            sources = response.get("source_documents", [])
+            source_texts = [source.page_content for source in sources]
+
+            return JsonResponse({
+                'result': result,
+                'sources': source_texts
+            })
+
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON format.'}, status=400)
+        except Exception as e:
+            return JsonResponse({'error': f"An error occurred: {str(e)}"}, status=500)
+
+    return render(request, 'chatbot/chat.html')
